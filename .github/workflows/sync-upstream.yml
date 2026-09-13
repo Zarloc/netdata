@@ -1,0 +1,53 @@
+# Cre: https://github.com/orgs/community/discussions/153608#discussioncomment-12453674
+name: Sync Fork with Upstream
+on:
+  schedule:
+    - cron: "0 0 * * *" # Runs daily at midnight UTC
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global user.email "994931+Zarloc@users.noreply.github.com"
+          git config --global user.name "Zarloc"
+
+      - name: Checkout Forked Repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          fetch-depth: 0
+
+      - name: Sync Upstream & Apply Patch
+        run: |
+          # 1. Store the workflow file content in an environment variable for later use
+          #    We need to do this before we reset the branch, otherwise the file will be lost and we won't be able to add it back in the commit
+          export SYNC_UPSTREAM=$(cat .github/workflows/sync-upstream.yml)
+          
+          # 2. Fetch Upstream
+          git remote add upstream https://github.com/netdata/netdata.git
+          git fetch upstream master
+
+          # 3. Hard Reset: Wipe local history to match Upstream exactly
+          # This removes yesterday's patch commit so we don't get conflicts
+          git checkout master
+          git reset --hard upstream/master
+
+          # 4. Apply the Hack (sed)
+          echo "Applying auth bypass patch..."
+          sed -i 's/return ((user & endpoint) == endpoint);/return true;/' src/web/api/http_auth.h
+          
+          # 5. Recreate the workflow file (because we reset the branch, we lost the file, so we need to add it back before committing)
+          echo "Recreating workflow file..."
+          echo "$SYNC_UPSTREAM" > .github/workflows/sync-upstream.yml
+
+          # 6. Commit the changes
+          git add src/web/api/http_auth.h
+          git add .github/workflows/sync-upstream.yml
+          git commit -m "feat: bypass Netdata Cloud sign-in which is required to access dashboard features"
+
+          # 7. Force Push
+          # We force push because we rewrote history (replaced yesterday's commit with today's)
+          git push origin master --force
